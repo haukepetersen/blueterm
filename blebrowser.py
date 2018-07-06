@@ -2,15 +2,13 @@
 
 import cmd
 import argparse
+from enum import Enum
 from bluepy.btle import Scanner, Peripheral, ADDR_TYPE_PUBLIC, UUID, DefaultDelegate
 
 # global configuration
 cfg = dict()
 cfg['intro'] = "Welcome to blueterm - Type 'help' or '?'' to list commands.\n"
-cfg['prompt'] = "(blueterm) "
-cfg['uuid_riot_shell'] = UUID("00002a00-0000-1000-8000-00805f9b34fb")
-
-# global state
+cfg['prompt'] = "~ "
 
 
 # class ScanDelegate(DefaultDelegate):
@@ -50,12 +48,19 @@ class Blueterm(cmd.Cmd):
     intro = cfg['intro']
     prompt = cfg['prompt']
 
+    class State(Enum):
+        IDLE = 1
+        CONNECTED = 2
+
+
     def __init__(self, device_index, scan_timeout):
         cmd.Cmd.__init__(self)
         self.device_index = device_index
         self.scan_timeout = scan_timeout
         self.ble_devs = set()
         self.ble_gatt = dict()
+        self.chars = dict()
+        self.state = self.State.IDLE
 
         # setup Bluetooth
         self.scanner = Scanner(device_index)
@@ -65,6 +70,14 @@ class Blueterm(cmd.Cmd):
     # Pla
     def precmd(self, line):
         return line
+
+    def do_state(self, line):
+        """Print current connection state
+        """
+        if self.state == self.State.CONNECTED:
+            print("Connected to {}".format(self.periph.addr))
+        else:
+            print(self.state)
 
     def do_scan(self, line):
         """Scan for available BLE RIOT shells.
@@ -119,19 +132,59 @@ usage: scan <scan timeout in sec>
             self.periph.connect(dev.addr, dev.addrType)
             services = self.periph.getServices()
             for i, service in enumerate(services):
-                print("Service {:2} UUID: {} ({})".format(i, service.uuid,
+                print("     Service {:2} UUID: {} ({})".format(i, service.uuid,
                       service.uuid.getCommonName()))
                 chars = service.getCharacteristics()
                 type(chars)
                 for i, char in enumerate(chars):
-                    print("   Char {:2} UUID: {} ({})".format(i, char.uuid,
+                    self.chars[char.getHandle()] = char
+                    print("{:5}   Char {:2} UUID: {} ({})".format(char.getHandle(), i, char.uuid,
                           char.uuid.getCommonName()))
                     # if char.supportsRead():
                     #     tmp = char.read()
                     #     print("Data: ", str(tmp))
+            self.state = self.State.CONNECTED
         except:
             print("error: while conneting something was bad")
             return
+
+
+    def do_disconnect(self, line):
+        """Close any open connection
+        """
+        self.periph.disconnect()
+        self.chars = dict()
+        self.state = self.State.IDLE
+        print(self.periph.addr)
+
+
+    def do_read(self, line):
+        try:
+            handle = int(line.strip())
+            char = self.chars[handle]
+            if not char.supportsRead():
+                print("error: characteristic is not readable")
+            else:
+                buf = char.read()
+                print("out: {}".format(buf.decode('utf-8')))
+        except:
+            print("usage: read <handle>")
+            return
+
+
+    def do_write(self, line):
+        cmd = line.strip().partition(' ')
+        if not cmd[2]:
+            print("usage: write <handle> <data>")
+            return
+
+        try:
+            handle = int(cmd[0])
+            char = self.chars[handle]
+            char.write(cmd[2].encode('utf-8'))
+        except:
+            print("error: unable to find characteristic")
+
 
 
 
